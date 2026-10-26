@@ -219,6 +219,76 @@ def read_webpage(url, fallback_snippet="", max_chars=6000):
     except Exception:
         return fallback_snippet, False
 
+def assess_source(source):
+    """Assess visible source metadata and evidence without inventing credibility."""
+
+    url = source.get("url", "")
+    domain = urlparse(url).netloc.lower()
+    title = source.get("title", "")
+    text = source.get("evidence", source.get("content", ""))
+
+    research_domains = (
+        ".edu", ".ac.", "arxiv.org", "pubmed.ncbi.nlm.nih.gov",
+        "doi.org", "nature.com", "sciencedirect.com",
+        "springer.com", "wiley.com"
+    )
+
+    government_domains = (".gov", ".gov.uk", ".gov.et")
+    organization_domains = (".org",)
+
+    if any(domain.endswith(item) for item in government_domains):
+        source_type = "Government website"
+    elif any(item in domain for item in research_domains):
+        source_type = "Potential research or academic source"
+    elif any(domain.endswith(item) for item in organization_domains):
+        source_type = "Organization website"
+    else:
+        source_type = "General website — type unverified"
+
+    checks = {
+        "Author or institution mentioned": bool(
+            source.get("author")
+            or any(word in text.lower() for word in [
+                "author:", "written by", "by staff", "research team"
+            ])
+        ),
+        "Date information visible": bool(
+            source.get("published")
+            or any(word in text.lower() for word in [
+                "published:", "updated:", "last updated"
+            ])
+        ),
+        "Methods or supporting details present": any(
+            word in text.lower() for word in [
+                "methodology", "methods", "sample size",
+                "data were collected", "we analyzed", "references"
+            ]
+        ),
+        "Substantive text available": len(text.strip()) >= 500,
+    }
+
+    passed = sum(checks.values())
+    total = len(checks)
+
+    if passed >= 3:
+        assessment = "More supporting indicators found"
+    elif passed >= 2:
+        assessment = "Some supporting indicators found"
+    else:
+        assessment = "Limited evidence available for assessment"
+
+    return {
+        "source_type": source_type,
+        "checks": checks,
+        "assessment": assessment,
+        "indicators_found": passed,
+        "indicators_checked": total,
+        "caveat": (
+            "This is a metadata and text-completeness check, not a "
+            "verified measure of accuracy, trustworthiness, or bias."
+        ),
+    }
+
 
 # ---------- SIDEBAR ----------
 
@@ -415,6 +485,7 @@ if submitted:
                 )
                 source["evidence"] = page_text
                 source["page_read"] = page_read
+                source["credibility"] = assess_source(source)
 
         # Keep the total prompt small enough for Groq's free-tier limits.
         MAX_EVIDENCE_CHARS = 6500
@@ -431,6 +502,22 @@ if submitted:
                 "evidence",
                 source.get("content", "")
             )
+            assessment = source.get("credibility")
+
+            if assessment:
+                st.markdown("#### 🔎 Source quality indicators")
+                st.write("**Source type:**", assessment["source_type"])
+                st.write("**Assessment:**", assessment["assessment"])
+                st.write(
+                    f"**Indicators found:** "
+                    f"{assessment['indicators_found']}/"
+                    f"{assessment['indicators_checked']}"
+                )
+
+                for check, passed in assessment["checks"].items():
+                    st.write(f"{'✓' if passed else '○'} {check}")
+
+                st.caption(assessment["caveat"])
             source_text = source_text[:min(MAX_SOURCE_CHARS, remaining_chars)]
 
             evidence_part = (
